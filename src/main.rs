@@ -7,6 +7,92 @@ use self::glfw::Context;
 
 extern crate gl;
 
+const LOG_MAX_LENGTH: usize = 512;
+
+enum ShaderType {
+    VERTEX,
+    FRAGMENT,
+}
+struct Shader {
+    handler: u32,
+}
+
+impl Shader {
+    pub fn try_new(shader_type: ShaderType, source: &str) -> Result<Self, String> {
+        let handler = match shader_type {
+            ShaderType::VERTEX => unsafe { gl::CreateShader(gl::VERTEX_SHADER) },
+            ShaderType::FRAGMENT => unsafe { gl::CreateShader(gl::FRAGMENT_SHADER) },
+        };
+
+        let source = CString::new(source.as_bytes()).unwrap();
+        unsafe { gl::ShaderSource(handler, 1, &source.as_ptr(), null()); }
+        unsafe { gl::CompileShader(handler); }
+
+        let mut success = gl::TRUE as GLint;
+        unsafe { gl::GetShaderiv(handler, gl::COMPILE_STATUS, &mut success); }
+        if success != gl::TRUE as GLint {
+            let mut log: Vec<u8> = Vec::with_capacity(LOG_MAX_LENGTH);
+            unsafe { gl::GetShaderInfoLog(handler, LOG_MAX_LENGTH as i32, null_mut(), log.as_mut_ptr() as *mut GLchar); }
+
+            let log = match std::str::from_utf8(&log) {
+                Ok(s) => s,
+                Err(e) => std::str::from_utf8(&log[..e.valid_up_to()]).unwrap()
+            };
+
+            Err(log.to_string())
+        } else { Ok(Self { handler }) }
+    }
+}
+
+impl Drop for Shader {
+    fn drop(&mut self) {
+        unsafe { gl::DeleteShader(self.handler); }
+    }
+}
+
+struct ShaderProgram {
+    handler: u32,
+}
+
+impl ShaderProgram {
+    pub fn new() -> Self {
+        let handler = unsafe { gl::CreateProgram() };
+
+        Self { handler }
+    }
+
+    pub fn add(&mut self, shader: Shader) {
+        unsafe { gl::AttachShader(self.handler, shader.handler); }
+    }
+
+    pub fn link(&mut self) -> Result<(), String> {
+        unsafe { gl::LinkProgram(self.handler); }
+
+        let mut success = gl::TRUE as GLint;
+        unsafe { gl::GetProgramiv(self.handler, gl::LINK_STATUS, &mut success); }
+        if success != gl::TRUE as GLint {
+            let mut log: Vec<u8> = Vec::with_capacity(LOG_MAX_LENGTH);
+            unsafe { log.set_len(LOG_MAX_LENGTH); }
+            unsafe { gl::GetProgramInfoLog(self.handler, LOG_MAX_LENGTH as i32, null_mut(), log.as_mut_ptr() as *mut GLchar); }
+
+            let log = match std::str::from_utf8(&log) {
+                Ok(s) => s,
+                Err(e) => std::str::from_utf8(&log[..e.valid_up_to()]).unwrap()
+            };
+
+            Err(log.to_string())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for ShaderProgram {
+    fn drop(&mut self) {
+        unsafe { gl::DeleteProgram(self.handler); }
+    }
+}
+
 fn main() {
     let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS)
         .expect("Failed to initialize glfw");
@@ -43,28 +129,7 @@ void main() {
     gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);
 }
         ";
-    let vertex_shader = CString::new(vertex_shader.as_bytes()).expect("shader is not UTF-8 string");
-    let vertex_shader_s;
-    unsafe { vertex_shader_s = gl::CreateShader(gl::VERTEX_SHADER); }
-    unsafe { gl::ShaderSource(vertex_shader_s, 1, &vertex_shader.as_ptr(), null()); }
-    unsafe { gl::CompileShader(vertex_shader_s); }
-
-
-    let mut success = gl::TRUE as GLint;
-    unsafe { gl::GetShaderiv(vertex_shader_s, gl::COMPILE_STATUS, &mut success); }
-    if success != gl::TRUE as GLint {
-        const LEN: usize = 512;
-        let mut log: Vec<u8> = Vec::with_capacity(LEN);
-        unsafe { log.set_len(LEN); }
-        unsafe { gl::GetShaderInfoLog(vertex_shader_s, LEN as i32, null_mut(), log.as_mut_ptr() as *mut GLchar); }
-
-        let log = match std::str::from_utf8(&log) {
-            Ok(s) => s,
-            Err(e) => std::str::from_utf8(&log[..e.valid_up_to()]).unwrap()
-        };
-
-        panic!("Shader compilation failed:\n{}", log);
-    }
+    let vertex_shader = Shader::try_new(ShaderType::VERTEX, vertex_shader).unwrap();
 
     let fragment_shader = "
 #version 330 core
@@ -75,58 +140,17 @@ void main() {
 } 
     ";
 
-    let fragment_shader = CString::new(fragment_shader.as_bytes()).expect("shader is not UTF-8 string");
-    let fragment_shader_s;
-    unsafe { fragment_shader_s = gl::CreateShader(gl::FRAGMENT_SHADER); }
-    unsafe { gl::ShaderSource(fragment_shader_s, 1, &fragment_shader.as_ptr(), null()); }
-    unsafe { gl::CompileShader(fragment_shader_s); }
+    let fragment_shader = Shader::try_new(ShaderType::FRAGMENT, fragment_shader).unwrap();
 
-    let mut success = gl::TRUE as GLint;
-    unsafe { gl::GetShaderiv(fragment_shader_s, gl::COMPILE_STATUS, &mut success); }
-    if success != gl::TRUE as GLint {
-        const LEN: usize = 512;
-        let mut log: Vec<u8> = Vec::with_capacity(LEN);
-        unsafe { log.set_len(LEN); }
-        unsafe { gl::GetShaderInfoLog(fragment_shader_s, LEN as i32, null_mut(), log.as_mut_ptr() as *mut GLchar); }
-
-        let log = match std::str::from_utf8(&log) {
-            Ok(s) => s,
-            Err(e) => std::str::from_utf8(&log[..e.valid_up_to()]).unwrap()
-        };
-
-        panic!("Shader compilation failed:\n{}", log);
-    }
-
-
-    let shader_program;
-    unsafe { shader_program = gl::CreateProgram(); }
-
-    unsafe { gl::AttachShader(shader_program, vertex_shader_s); }
-    unsafe { gl::AttachShader(shader_program, fragment_shader_s); }
-    unsafe { gl::LinkProgram(shader_program); }
-
-    let mut success = gl::TRUE as GLint;
-    unsafe { gl::GetProgramiv(shader_program, gl::LINK_STATUS, &mut success); }
-    if success != gl::TRUE as GLint {
-        const LEN: usize = 512;
-        let mut log: Vec<u8> = Vec::with_capacity(LEN);
-        unsafe { log.set_len(LEN); }
-        unsafe { gl::GetProgramInfoLog(shader_program, LEN as i32, null_mut(), log.as_mut_ptr() as *mut GLchar); }
-
-        let log = match std::str::from_utf8(&log) {
-            Ok(s) => s,
-            Err(e) => std::str::from_utf8(&log[..e.valid_up_to()]).unwrap()
-        };
-
-        panic!("Shader linkage failed:\n{}", log);
-    }
+    let mut shader_program = ShaderProgram::new();
+    shader_program.add(vertex_shader);
+    shader_program.add(fragment_shader);
+    shader_program.link().unwrap();
 
     unsafe { gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * size_of::<f32>() as i32, null()); }
     unsafe { gl::EnableVertexAttribArray(0); }
 
-    unsafe { gl::UseProgram(shader_program); }
-    unsafe { gl::DeleteShader(vertex_shader_s); }
-    unsafe { gl::DeleteShader(fragment_shader_s); }
+    unsafe { gl::UseProgram(shader_program.handler); }
 
 
     while !window.should_close() {
