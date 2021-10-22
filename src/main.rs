@@ -57,7 +57,7 @@ struct ShaderProgram {
 }
 
 impl ShaderProgram {
-    pub fn try_new(vertex: Shader, fragment: Shader) -> Result<Self, String> {
+    pub fn try_new(vertex: Shader, fragment: Shader, layout: &[VertexAttribute]) -> Result<Self, String> {
         let handler = unsafe { gl::CreateProgram() };
         unsafe { gl::AttachShader(handler, vertex.handler); }
         unsafe { gl::AttachShader(handler, fragment.handler); }
@@ -79,6 +79,29 @@ impl ShaderProgram {
 
             Err(log.to_string())
         } else {
+            for (i, attribute) in layout.iter().enumerate() {
+                let normalized = match attribute.normalized {
+                    true => gl::TRUE,
+                    false => gl::FALSE,
+                };
+                let attribute_type = match attribute.attribute_type {
+                    VertexAttributeType::F32 => gl::FLOAT,
+                    VertexAttributeType::I32 => gl::INT,
+                    VertexAttributeType::U32 => gl::UNSIGNED_INT,
+                };
+                unsafe {
+                    gl::VertexAttribPointer(
+                        i as u32,
+                        attribute.size as i32,
+                        attribute_type as u32,
+                        normalized as u8,
+                        attribute.stride as i32,
+                        attribute.width as *const c_void,
+                    );
+                }
+                unsafe { gl::EnableVertexAttribArray(i as u32); }
+            }
+
             Ok(Self {
                 handler,
                 uniforms: HashMap::new()
@@ -160,6 +183,26 @@ impl Drop for Buffer {
     }
 }
 
+enum VertexAttributeType {
+    F32,
+    I32,
+    U32,
+}
+
+struct VertexAttribute {
+    attribute_type: VertexAttributeType,
+    size: usize,
+    normalized: bool,
+    stride: usize,
+    width: usize,
+}
+
+impl VertexAttribute {
+    fn new(attribute_type: VertexAttributeType, size: usize, normalized: bool, stride: usize, width: usize) -> Self {
+        Self { attribute_type, size, normalized, stride, width }
+    }
+}
+
 fn main() {
     let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS)
         .expect("Failed to initialize glfw");
@@ -227,18 +270,18 @@ void main() {
 
     let fragment_shader = Shader::try_new(ShaderType::FRAGMENT, fragment_shader).unwrap();
 
-    let mut shader_program = ShaderProgram::try_new(vertex_shader, fragment_shader).unwrap();
-
-
-
-    unsafe { gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * size_of::<f32>() as i32, null()); }
-    unsafe { gl::EnableVertexAttribArray(0); }
-
+    let mut shader_program = ShaderProgram::try_new(
+        vertex_shader,
+        fragment_shader,
+        &[
+            VertexAttribute::new(VertexAttributeType::F32, 3, false, 3 * size_of::<f32>(), 0),
+        ]
+    ).unwrap();
     shader_program.activate();
+
     let mut color: f32 = 0.;
 
     shader_program.set_3f32("color", 0.5, 0., 0.);
-
 
     let mut last_time = glfw.get_time();
 
