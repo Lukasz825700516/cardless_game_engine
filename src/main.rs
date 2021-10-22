@@ -129,6 +129,37 @@ impl Drop for ShaderProgram {
     }
 }
 
+enum BufferType {
+    VERTEX,
+    ELEMENT,
+}
+
+struct Buffer {
+    handler: u32,
+}
+
+impl Buffer {
+    pub fn new(buffer_type: BufferType, memory: &[u8]) -> Self {
+        let mut handler = 0;
+        let buffer_type = match buffer_type {
+            BufferType::VERTEX => gl::ARRAY_BUFFER,
+            BufferType::ELEMENT => gl::ELEMENT_ARRAY_BUFFER,
+        };
+
+        unsafe { gl::GenBuffers(1, &mut handler); }
+        unsafe { gl::BindBuffer(buffer_type, handler); }
+        unsafe { gl::BufferData(buffer_type, memory.len() as isize, memory.as_ptr() as *const c_void, gl::STATIC_DRAW); }
+
+        Self { handler }
+    }
+}
+
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        unsafe { gl::DeleteBuffers(1, &self.handler); }
+    }
+}
+
 fn main() {
     let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS)
         .expect("Failed to initialize glfw");
@@ -154,19 +185,22 @@ fn main() {
         0, 1, 2,
         2, 1, 3,
     ];
+
+    let vertex_buffer = vertex_buffer
+        .into_iter()
+        .flat_map(|v| v.to_ne_bytes())
+        .collect::<Vec<_>>();
+    let indicies_buffer = indicies_buffer
+        .into_iter()
+        .flat_map(|v| v.to_ne_bytes())
+        .collect::<Vec<_>>();
+
     let mut vao = 0;
     unsafe { gl::GenVertexArrays(1, &mut vao); }
     unsafe { gl::BindVertexArray(vao); }
 
-    let mut vbo = 0;
-    unsafe { gl::GenBuffers(1, &mut vbo); }
-    unsafe { gl::BindBuffer(gl::ARRAY_BUFFER, vbo); }
-    unsafe { gl::BufferData(gl::ARRAY_BUFFER, (vertex_buffer.len() * size_of::<f32>()) as isize, vertex_buffer.as_ptr() as *const c_void, gl::STATIC_DRAW); }
-
-    let mut ebo = 0;
-    unsafe { gl::GenBuffers(1, &mut ebo); }
-    unsafe { gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo); }
-    unsafe { gl::BufferData(gl::ELEMENT_ARRAY_BUFFER, (indicies_buffer.len() * size_of::<u32>()) as isize, indicies_buffer.as_ptr() as *const c_void, gl::STATIC_DRAW); }
+    let vbo = Buffer::new(BufferType::VERTEX, &vertex_buffer);
+    let ebo = Buffer::new(BufferType::ELEMENT, &indicies_buffer);
 
     unsafe { gl::Enable(gl::CULL_FACE); }
     unsafe { gl::CullFace(gl::BACK); }
@@ -196,6 +230,7 @@ void main() {
     let mut shader_program = ShaderProgram::try_new(vertex_shader, fragment_shader).unwrap();
 
 
+
     unsafe { gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * size_of::<f32>() as i32, null()); }
     unsafe { gl::EnableVertexAttribArray(0); }
 
@@ -217,7 +252,7 @@ void main() {
         color = last_time.sin().abs() as f32;
         shader_program.set_3f32("color", color, 0., 0.);
 
-        unsafe { gl::DrawElements(gl::TRIANGLES, indicies_buffer.len() as i32, gl::UNSIGNED_INT, null()); }
+        unsafe { gl::DrawElements(gl::TRIANGLES, indicies_buffer.len() as i32 / 4, gl::UNSIGNED_INT, null()); }
 
         window.swap_buffers();
         glfw.poll_events();
