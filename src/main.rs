@@ -219,10 +219,10 @@ fn main() {
     gl::load_with(|symbol| window.get_proc_address(symbol));
 
     let vertex_buffer: Vec<f32> = vec![
-        -0.5, -0.5, 0.,
-        0.5, -0.5, 0.,
-        -0.5, 0.5, 0.,
-        0.5, 0.5, 0.,
+        -0.5, -0.5, 0., 1., 0., 0.,
+        0.5, -0.5, 0., 0., 1., 0.,
+        -0.5, 0.5, 0., 0., 0., 1.,
+        0.5, 0.5, 0., 1., 1., 1.,
     ];
     let indicies_buffer: Vec<u32> = vec![
         0, 1, 2,
@@ -251,7 +251,12 @@ fn main() {
     let vertex_shader = "
 #version 330 core
 layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aCol;
+
+out vec3 oCol;
+
 void main() {
+    oCol = aCol;
     gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);
 }
         ";
@@ -259,12 +264,13 @@ void main() {
 
     let fragment_shader = "
 #version 330 core
+in vec3 oCol;
 out vec4 FragColor;
 
 uniform vec3 color;
 
 void main() {
-    FragColor = vec4(color.xyz, 1.0f);
+    FragColor = vec4(color.xyz + oCol.xyz, 1.0f);
 } 
     ";
 
@@ -274,7 +280,8 @@ void main() {
         vertex_shader,
         fragment_shader,
         &[
-            VertexAttribute::new(VertexAttributeType::F32, 3, false, 3 * size_of::<f32>(), 0),
+            VertexAttribute::new(VertexAttributeType::F32, 3, false, 6 * size_of::<f32>(), 0),
+            VertexAttribute::new(VertexAttributeType::F32, 3, false, 6 * size_of::<f32>(), 3 * size_of::<f32>()),
         ]
     ).unwrap();
     shader_program.activate();
