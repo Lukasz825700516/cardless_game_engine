@@ -1,5 +1,5 @@
 extern crate glfw;
-use std::{borrow::BorrowMut, ffi::{CStr, CString, c_void}, mem::size_of, ptr::{null, null_mut}, slice};
+use std::{borrow::BorrowMut, collections::HashMap, ffi::{CStr, CString, c_void}, mem::size_of, ptr::{null, null_mut}, slice, time::Duration};
 
 use gl::types::{GLchar, GLint};
 
@@ -13,6 +13,7 @@ enum ShaderType {
     VERTEX,
     FRAGMENT,
 }
+
 struct Shader {
     handler: u32,
 }
@@ -52,28 +53,24 @@ impl Drop for Shader {
 
 struct ShaderProgram {
     handler: u32,
+    uniforms: HashMap<String, i32>,
 }
 
 impl ShaderProgram {
-    pub fn new() -> Self {
+    pub fn try_new(vertex: Shader, fragment: Shader) -> Result<Self, String> {
         let handler = unsafe { gl::CreateProgram() };
+        unsafe { gl::AttachShader(handler, vertex.handler); }
+        unsafe { gl::AttachShader(handler, fragment.handler); }
 
-        Self { handler }
-    }
 
-    pub fn add(&mut self, shader: Shader) {
-        unsafe { gl::AttachShader(self.handler, shader.handler); }
-    }
-
-    pub fn link(&mut self) -> Result<(), String> {
-        unsafe { gl::LinkProgram(self.handler); }
+        unsafe { gl::LinkProgram(handler); }
 
         let mut success = gl::TRUE as GLint;
-        unsafe { gl::GetProgramiv(self.handler, gl::LINK_STATUS, &mut success); }
+        unsafe { gl::GetProgramiv(handler, gl::LINK_STATUS, &mut success); }
         if success != gl::TRUE as GLint {
             let mut log: Vec<u8> = Vec::with_capacity(LOG_MAX_LENGTH);
             unsafe { log.set_len(LOG_MAX_LENGTH); }
-            unsafe { gl::GetProgramInfoLog(self.handler, LOG_MAX_LENGTH as i32, null_mut(), log.as_mut_ptr() as *mut GLchar); }
+            unsafe { gl::GetProgramInfoLog(handler, LOG_MAX_LENGTH as i32, null_mut(), log.as_mut_ptr() as *mut GLchar); }
 
             let log = match std::str::from_utf8(&log) {
                 Ok(s) => s,
@@ -82,8 +79,47 @@ impl ShaderProgram {
 
             Err(log.to_string())
         } else {
-            Ok(())
+            Ok(Self {
+                handler,
+                uniforms: HashMap::new()
+            })
         }
+    }
+
+    fn getload_uniform(&mut self, name: &str) -> Option<i32> {
+        match self.uniforms.get(name) {
+            Some(v) => Some(v.to_owned()),
+            None => {
+                let c_name = CString::new(name).unwrap();
+                match unsafe { gl::GetUniformLocation(self.handler, c_name.as_ptr()) } {
+                    -1 => None,
+                    uniform => {
+                        self.uniforms.insert(name.to_string(), uniform);
+                        Some(uniform)
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn set_1i(&mut self, name: &str, v0: i32) {
+        match self.getload_uniform(name) {
+            Some(uniform) => unsafe {gl::Uniform1i(uniform, v0); },
+            None => {}
+        }
+    }
+
+    pub fn set_3f32(&mut self, name: &str, v0: f32, v1: f32, v2: f32) {
+        match self.getload_uniform(name) {
+            Some(uniform) => unsafe {gl::Uniform3f(uniform, v0, v1, v2); },
+            None => {}
+        }
+    }
+
+    pub fn activate(&mut self) -> &mut Self {
+        unsafe { gl::UseProgram(self.handler); }
+
+        self
     }
 }
 
@@ -109,9 +145,14 @@ fn main() {
     gl::load_with(|symbol| window.get_proc_address(symbol));
 
     let vertex_buffer: Vec<f32> = vec![
-        0., 1., 0.,
-        1., -0.5, 0.,
-        -1., -0.5, 0.,
+        -0.5, -0.5, 0.,
+        0.5, -0.5, 0.,
+        -0.5, 0.5, 0.,
+        0.5, 0.5, 0.,
+    ];
+    let indicies_buffer: Vec<u32> = vec![
+        0, 1, 2,
+        2, 1, 3,
     ];
     let mut vao = 0;
     unsafe { gl::GenVertexArrays(1, &mut vao); }
@@ -121,6 +162,14 @@ fn main() {
     unsafe { gl::GenBuffers(1, &mut vbo); }
     unsafe { gl::BindBuffer(gl::ARRAY_BUFFER, vbo); }
     unsafe { gl::BufferData(gl::ARRAY_BUFFER, (vertex_buffer.len() * size_of::<f32>()) as isize, vertex_buffer.as_ptr() as *const c_void, gl::STATIC_DRAW); }
+
+    let mut ebo = 0;
+    unsafe { gl::GenBuffers(1, &mut ebo); }
+    unsafe { gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo); }
+    unsafe { gl::BufferData(gl::ELEMENT_ARRAY_BUFFER, (indicies_buffer.len() * size_of::<u32>()) as isize, indicies_buffer.as_ptr() as *const c_void, gl::STATIC_DRAW); }
+
+    unsafe { gl::Enable(gl::CULL_FACE); }
+    unsafe { gl::CullFace(gl::BACK); }
 
     let vertex_shader = "
 #version 330 core
@@ -135,28 +184,45 @@ void main() {
 #version 330 core
 out vec4 FragColor;
 
+uniform vec3 color;
+
 void main() {
-    FragColor = vec4(1.0f, 0.5f, 0.2f, 1.0f);
+    FragColor = vec4(color.xyz, 1.0f);
 } 
     ";
 
     let fragment_shader = Shader::try_new(ShaderType::FRAGMENT, fragment_shader).unwrap();
 
-    let mut shader_program = ShaderProgram::new();
-    shader_program.add(vertex_shader);
-    shader_program.add(fragment_shader);
-    shader_program.link().unwrap();
+    let mut shader_program = ShaderProgram::try_new(vertex_shader, fragment_shader).unwrap();
+
 
     unsafe { gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, 3 * size_of::<f32>() as i32, null()); }
     unsafe { gl::EnableVertexAttribArray(0); }
 
-    unsafe { gl::UseProgram(shader_program.handler); }
+    shader_program.activate();
+    let mut color: f32 = 0.;
 
+    shader_program.set_3f32("color", 0.5, 0., 0.);
+
+
+    let mut last_time = glfw.get_time();
 
     while !window.should_close() {
-        unsafe { gl::DrawArrays(gl::TRIANGLES, 0, 3); }
+        let (width, height) = window.get_size();
+        unsafe { gl::Viewport(0, 0, width, height); }
+
+        let time_delta = glfw.get_time() - last_time;
+        last_time = glfw.get_time();
+
+        color = last_time.sin().abs() as f32;
+        shader_program.set_3f32("color", color, 0., 0.);
+
+        unsafe { gl::DrawElements(gl::TRIANGLES, indicies_buffer.len() as i32, gl::UNSIGNED_INT, null()); }
 
         window.swap_buffers();
         glfw.poll_events();
+
+        // 60 fps max
+        std::thread::sleep(Duration::from_millis(1000 / 60));
     }
 }
