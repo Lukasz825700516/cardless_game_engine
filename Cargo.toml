@@ -10,3 +10,6 @@ license = "GPL-3"
 [dependencies]
 gl = "*"
 glfw = "*"
+image = "*"
+glm = "*"
+memoffset = "*"
